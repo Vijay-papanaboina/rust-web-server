@@ -1,0 +1,26 @@
+use tokio::net::{
+    TcpListener,
+    TcpStream
+};
+
+use mrequest::handle_request;
+
+mod mrequest;
+
+#[tokio::main]
+async fn main() {
+    let listener = TcpListener::bind("127.0.0.1:7878").await.unwrap();
+    println!("Listening on http://127.0.0.1:7878");
+
+    loop {
+        let (stream, _) = listener.accept().await.unwrap();
+
+        tokio::spawn(async move {
+            handle_connection(stream).await;
+        });
+    }
+}
+
+async fn handle_connection(mut stream: TcpStream) {
+    handle_request(&mut stream).await;
+}
