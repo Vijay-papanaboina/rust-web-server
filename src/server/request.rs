@@ -5,8 +5,9 @@ use tokio::net::TcpStream;
 
 use crate::server::middleware;
 use crate::server::routes;
+use std::error::Error;
 
-#[derive( Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Request {
     pub method: String,
     pub path: String,
@@ -38,13 +39,14 @@ impl Request {
     }
 }
 
-pub async fn handle_request(stream: &mut TcpStream) {
+pub async fn handle_request(stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
     if let Some(request) = parse_request(stream).await {
         middleware::logger(&request);
-        routes::route(&request, stream).await;
+        routes::route(&request, stream).await?;
     } else {
-        routes::not_found(stream).await;
+        routes::not_found(stream).await?;
     }
+    Ok(())
 }
 
 async fn parse_request(stream: &mut TcpStream) -> Option<Request> {

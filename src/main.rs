@@ -1,7 +1,4 @@
-use tokio::net::{
-    TcpListener,
-    TcpStream
-};
+use tokio::net::{TcpListener, TcpStream};
 
 mod server;
 
@@ -22,5 +19,7 @@ async fn main() {
 }
 
 async fn handle_connection(mut stream: TcpStream) {
-    handle_request(&mut stream).await;
+    if let Err(e) = handle_request(&mut stream).await {
+        eprintln!("Error handling connection: {}", e);
+    }
 }

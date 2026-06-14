@@ -1,3 +1,4 @@
+use std::error::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
@@ -25,7 +26,12 @@ impl StatusCode {
     }
 }
 
-pub async fn send_response(stream: &mut TcpStream, status: StatusCode, content_type: &str, body: &[u8]) {
+pub async fn send_response(
+    stream: &mut TcpStream,
+    status: StatusCode,
+    content_type: &str,
+    body: &[u8],
+) -> Result<(), Box<dyn Error>> {
     let header = format!(
         "HTTP/1.1 {}\r\n\
          Content-Type: {}\r\n\
@@ -35,6 +41,7 @@ pub async fn send_response(stream: &mut TcpStream, status: StatusCode, content_t
         content_type,
         body.len()
     );
-    let _ = stream.write_all(header.as_bytes()).await;
-    let _ = stream.write_all(body).await;
+    stream.write_all(header.as_bytes()).await?;
+    stream.write_all(body).await?;
+    Ok(())
 }
