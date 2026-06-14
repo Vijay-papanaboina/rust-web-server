@@ -3,9 +3,9 @@ use tokio::net::{
     TcpStream
 };
 
-use mrequest::handle_request;
+mod server;
 
-mod mrequest;
+use server::request::handle_request;
 
 #[tokio::main]
 async fn main() {

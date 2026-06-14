@@ -1,4 +1,4 @@
-use crate::mrequest::Request;
+use crate::server::request::Request;
 
 pub fn logger(request: &Request) {
     println!("Request-Line: {} {}", request.method, request.path);

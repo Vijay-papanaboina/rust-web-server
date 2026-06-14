@@ -3,16 +3,16 @@ use std::collections::HashMap;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::net::TcpStream;
 
-mod mroutes;
-mod middleware;
+use crate::server::middleware;
+use crate::server::routes;
 
 #[derive( Serialize, Deserialize)]
 pub struct Request {
-    method: String,
-    path: String,
-    version: String,
-    headers: HashMap<String, String>,
-    body: Vec<u8>,
+    pub method: String,
+    pub path: String,
+    pub version: String,
+    pub headers: HashMap<String, String>,
+    pub body: Vec<u8>,
 }
 
 impl std::fmt::Debug for Request {
@@ -40,15 +40,10 @@ impl Request {
 
 pub async fn handle_request(stream: &mut TcpStream) {
     if let Some(request) = parse_request(stream).await {
-    middleware::logger(&request);
-    match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/") => mroutes::index(&request, stream).await,
-        ("POST", "/echo") => mroutes::echo(&request, stream).await,
-        // ("POST", "/json") => mroutes::json(request, stream).await,
-        _ => mroutes::not_found(stream).await,
-    }
+        middleware::logger(&request);
+        routes::route(&request, stream).await;
     } else {
-        mroutes::not_found(stream).await;
+        routes::not_found(stream).await;
     }
 }
 
