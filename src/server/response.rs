@@ -3,7 +3,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
 #[derive(Debug, Clone, Copy)]
-#[allow(unused)]
 pub enum StatusCode {
     Ok,
     Created,

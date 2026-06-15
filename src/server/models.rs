@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, sqlx::FromRow)]
 pub struct UserRecord {
-    pub id: String,
+    pub id: Uuid,
     pub username: String,
     pub email: String,
     pub password: String,
@@ -23,14 +24,14 @@ pub struct CreateAccountRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserResponse {
-    pub id: String,
+    pub id: Uuid,
     pub username: String,
     pub email: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LoginResponse {
-    pub id: String,
+    pub id: Uuid,
     pub username: String,
     pub email: String,
     pub token: String,

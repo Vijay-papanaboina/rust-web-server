@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::env;
+use sqlx::PgPool;
 
 use tokio::net::{TcpListener, TcpStream};
 
@@ -10,7 +10,6 @@ use server::request::handle_request;
 use server::routes::Controller;
 use server::services::Service;
 use server::repo::UserRepo;
-use server::models::UserRecord;
 use server::middleware::Middleware;
 use server::jwt::Jwt;
 
@@ -19,11 +18,30 @@ async fn main() {
     let listener = TcpListener::bind("127.0.0.1:7878").await.unwrap();
     println!("Listening on http://127.0.0.1:7878");
 
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let pool = PgPool::connect(&database_url)
+        .await
+        .expect("Failed to connect to PostgreSQL database");
+
+    // Automatically initialize database schema if not present
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS users (
+            id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+            username VARCHAR(255) NOT NULL,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            password VARCHAR(255) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );"
+    )
+    .execute(&pool)
+    .await
+    .expect("Failed to initialize database schema");
+
     let jwt_secret = env::var("JWT_SECRET").expect("JWT_SECRET must be set");
     let jwt = Jwt::new(jwt_secret);
     let middleware = Middleware::new(jwt);
-    let users_db: Arc<Mutex<HashMap<String, UserRecord>>> = Arc::new(Mutex::new(HashMap::new()));
-    let repo = UserRepo::new(users_db);
+    let repo = UserRepo::new(pool);
     let service = Service::new(repo);
     let controller = Arc::new(Controller::new(service, middleware));
 

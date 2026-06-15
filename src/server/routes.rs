@@ -75,7 +75,7 @@ impl Controller {
                     .as_secs() as usize
                     + 24 * 3600; // 24 hours
                 let claims = Claims {
-                    sub: user.email.clone(),
+                    sub: user.id.to_string(),
                     exp,
                 };
                 let token = match self.middleware.jwt.encode(&claims).map_err(|e| e.to_string()) {
@@ -156,18 +156,25 @@ impl Controller {
         request: &Request,
         stream: &mut TcpStream,
     ) -> Result<(), Box<dyn Error>> {
-        let id = request.path.split('?').nth(1).and_then(|query| {
-            query
-                .split('&')
-                .find(|pair| pair.starts_with("id="))
-                .and_then(|pair| pair.split('=').nth(1))
-                .map(|val| val.to_string())
-        });
-
-        let id = match id {
-            Some(val) => val,
+        let user_id = match &request.user {
+            Some(claims) => &claims.sub,
             None => {
-                let response_json = r#"{"error": "Missing id parameter"}"#;
+                let response_json = r#"{"error": "Unauthorized"}"#;
+                send_response(
+                    stream,
+                    StatusCode::Unauthorized,
+                    "application/json",
+                    response_json.as_bytes(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        let parsed_uuid = match uuid::Uuid::parse_str(user_id) {
+            Ok(u) => u,
+            Err(_) => {
+                let response_json = r#"{"error": "Invalid user ID in token"}"#;
                 send_response(
                     stream,
                     StatusCode::BadRequest,
@@ -179,7 +186,7 @@ impl Controller {
             }
         };
 
-        if let Some(user) = self.service.get_user(&id).await {
+        if let Some(user) = self.service.get_user(&parsed_uuid).await {
             let response_bytes = serde_json::to_vec(&user)?;
             send_response(stream, StatusCode::Ok, "application/json", &response_bytes).await?;
         } else {

@@ -11,7 +11,7 @@ impl Service {
             repo,
         }
     }
-    pub async fn register_user(&self, req: CreateAccountRequest) -> Result<UserResponse, bcrypt::BcryptError> {
+    pub async fn register_user(&self, req: CreateAccountRequest) -> Result<UserResponse, Box<dyn std::error::Error + Send + Sync>> {
         self.repo.insert_user(req.username, req.email, req.password).await
     }
     pub async fn login(&self, email: String, password: String) -> Option<UserResponse> {
@@ -21,7 +21,7 @@ impl Service {
             email: user.email,
         })
     }
-    pub async fn get_user(&self, id: &str) -> Option<UserResponse> {
+    pub async fn get_user(&self, id: &uuid::Uuid) -> Option<UserResponse> {
         self.repo.get_user_by_id(id).await.map(|user| UserResponse {
             id: user.id,
             username: user.username,
