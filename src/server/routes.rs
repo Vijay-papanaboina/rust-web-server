@@ -76,16 +76,28 @@ impl Controller {
             None => return Ok(()),
         };
     
-        let registered_user = self.service.register_user(req_data).await;
-    
-        let response_bytes = serde_json::to_vec(&registered_user)?;
-        send_response(
-            stream,
-            StatusCode::Created,
-            "application/json",
-            &response_bytes,
-        )
-        .await?;
+        match self.service.register_user(req_data).await {
+            Ok(registered_user) => {
+                let response_bytes = serde_json::to_vec(&registered_user)?;
+                send_response(
+                    stream,
+                    StatusCode::Created,
+                    "application/json",
+                    &response_bytes,
+                )
+                .await?;
+            }
+            Err(_) => {
+                let response = r#"{"error": "Failed to process password encryption"}"#;
+                send_response(
+                    stream,
+                    StatusCode::InternalServerError,
+                    "application/json",
+                    response.as_bytes(),
+                )
+                .await?;
+            }
+        }
         Ok(())
     }
     

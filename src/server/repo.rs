@@ -16,30 +16,31 @@ impl UserRepo {
 
 impl UserRepo {
     
-    pub async fn insert_user(&self, username: String, email: String, password: String) -> UserResponse {
+    pub async fn insert_user(&self, username: String, email: String, password: String) -> Result<UserResponse, bcrypt::BcryptError> {
         let id = uuid::Uuid::new_v4().to_string();
+        let hashed_password = bcrypt::hash(password, bcrypt::DEFAULT_COST)?;
     
         let record = UserRecord {
             id: id.clone(),
             username: username.clone(),
             email: email.clone(),
-            password,
+            password: hashed_password,
         };
     
         self.users.lock().unwrap().insert(email.clone(), record);
     
-        UserResponse {
+        Ok(UserResponse {
             id,
             username,
             email,
-        }
+        })
     }
     
     pub async fn login(&self, email: String, password: String) -> Option<UserRecord> {
         let user_login = self.users.lock().unwrap().get(&email).cloned();
         match user_login {
             Some(user) => {
-                if user.password == password {
+                if bcrypt::verify(password, &user.password).unwrap_or(false) {
                     Some(user)
                 } else {
                     None

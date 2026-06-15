@@ -11,7 +11,7 @@ impl Service {
             repo,
         }
     }
-    pub async fn register_user(&self, req: CreateAccountRequest) -> UserResponse {
+    pub async fn register_user(&self, req: CreateAccountRequest) -> Result<UserResponse, bcrypt::BcryptError> {
         self.repo.insert_user(req.username, req.email, req.password).await
     }
     pub async fn login(&self, email: String, password: String) -> Option<UserResponse> {

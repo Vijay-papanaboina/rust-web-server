@@ -23,7 +23,13 @@ async fn main() {
     let controller = Arc::new(Controller::new(service));
 
     loop {
-        let (stream, _) = listener.accept().await.unwrap();
+        let (stream, _) = match listener.accept().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                eprintln!("Failed to accept connection: {}", e);
+                continue;
+            }
+        };
 
         let controller = controller.clone();
         tokio::spawn(async move {
