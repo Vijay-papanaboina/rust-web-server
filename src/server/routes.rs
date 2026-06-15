@@ -39,37 +39,41 @@ impl Controller {
     }
     
     pub async fn login(&self, request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
-        let req_data: LoginRequest = request.json().unwrap();
+        let req_data = match request.parse_json::<LoginRequest>(stream).await {
+            Some(data) => data,
+            None => return Ok(()),
+        };
             
         let response = self.service.login(req_data.email, req_data.password).await;
-        let response = match response {
-            Some(user) => serde_json::to_vec(&user).unwrap(),
-            None => serde_json::to_vec(&"Invalid credentials".to_string()).unwrap(),
-        };
-        send_response(
-            stream,
-            StatusCode::Ok,
-            "application/json",
-            &response,
-        )
-        .await?;
-        Ok(())
-    }
-    
-    pub async fn create_account(&self, request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
-        let req_data: CreateAccountRequest = match request.json() {
-            Ok(data) => data,
-            Err(_) => {
-                let response = r#"{"error": "Invalid JSON payload"}"#;
+        match response {
+            Some(user) => {
+                let response_bytes = serde_json::to_vec(&user)?;
                 send_response(
                     stream,
-                    StatusCode::BadRequest,
+                    StatusCode::Ok,
+                    "application/json",
+                    &response_bytes,
+                )
+                .await?;
+            }
+            None => {
+                let response = r#"{"error": "Invalid credentials"}"#;
+                send_response(
+                    stream,
+                    StatusCode::Unauthorized,
                     "application/json",
                     response.as_bytes(),
                 )
                 .await?;
-                return Ok(());
             }
+        };
+        Ok(())
+    }
+    
+    pub async fn create_account(&self, request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+        let req_data = match request.parse_json::<CreateAccountRequest>(stream).await {
+            Some(data) => data,
+            None => return Ok(()),
         };
     
         let registered_user = self.service.register_user(req_data).await;

@@ -38,6 +38,26 @@ impl Request {
     {
         serde_json::from_slice(&self.body)
     }
+
+    pub async fn parse_json<T>(&self, stream: &mut TcpStream) -> Option<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        match self.json::<T>() {
+            Ok(data) => Some(data),
+            Err(_) => {
+                let response = r#"{"error": "Invalid JSON payload"}"#;
+                let _ = crate::server::response::send_response(
+                    stream,
+                    crate::server::response::StatusCode::BadRequest,
+                    "application/json",
+                    response.as_bytes(),
+                )
+                .await;
+                None
+            }
+        }
+    }
 }
 
 pub async fn handle_request(controller: &Controller, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
