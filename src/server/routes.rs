@@ -1,63 +1,137 @@
-use crate::server::models::{CreateAccountRequest, LoginRequest, UserResponse};
+use crate::server::models::{CreateAccountRequest, LoginRequest};
 use crate::server::request::Request;
 use crate::server::response::{StatusCode, send_response};
+use crate::server::services::Service;
 use std::error::Error;
 use tokio::net::TcpStream;
 
-pub async fn route(request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
-    match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/") => index(request, stream).await,
-        ("POST", "/login") => login(request, stream).await,
-        ("POST", "/register") => create_account(request, stream).await,
-        ("GET", "/user") => get_user(request, stream).await,
+pub async fn route(controller: &Controller, request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+    // Check request path ignoring query parameters for matching routes
+    let path = request.path.split('?').next().unwrap_or("/");
+
+    match (request.method.as_str(), path) {
+        ("GET", "/") => controller.index(request, stream).await,
+        ("POST", "/login") => controller.login(request, stream).await,
+        ("POST", "/register") => controller.create_account(request, stream).await,
+        ("GET", "/user") => controller.get_user(request, stream).await,
         _ => not_found(stream).await,
     }
 }
 
-async fn index(request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
-    let body = format!(
-        "This is a web server written in Rust without any framework.\n\
-         You are on the {} {} path.\n",
-        request.method, request.path
-    );
-    send_response(stream, StatusCode::Ok, "text/plain", body.as_bytes()).await?;
-    Ok(())
+pub struct Controller {
+    pub service: Service,
 }
 
-async fn login(_request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
-    let response = r#"{"message": "Login successful", "token": "mock-token-xyz"}"#;
-    send_response(
-        stream,
-        StatusCode::Ok,
-        "application/json",
-        response.as_bytes(),
-    )
-    .await?;
-    Ok(())
-}
+impl Controller {
+    pub fn new(service: Service) -> Self {
+        Self { service }
+    }
+    
+    
+    pub async fn index(&self, request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+        let body = format!(
+            "This is a web server written in Rust without any framework.\n\
+             You are on the {} {} path.\n",
+            request.method, request.path
+        );
+        send_response(stream, StatusCode::Ok, "text/plain", body.as_bytes()).await?;
+        Ok(())
+    }
+    
+    pub async fn login(&self, request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+        let req_data: LoginRequest = request.json().unwrap();
+            
+        let response = self.service.login(req_data.email, req_data.password).await;
+        let response = match response {
+            Some(user) => serde_json::to_vec(&user).unwrap(),
+            None => serde_json::to_vec(&"Invalid credentials".to_string()).unwrap(),
+        };
+        send_response(
+            stream,
+            StatusCode::Ok,
+            "application/json",
+            &response,
+        )
+        .await?;
+        Ok(())
+    }
+    
+    pub async fn create_account(&self, request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+        let req_data: CreateAccountRequest = match request.json() {
+            Ok(data) => data,
+            Err(_) => {
+                let response = r#"{"error": "Invalid JSON payload"}"#;
+                send_response(
+                    stream,
+                    StatusCode::BadRequest,
+                    "application/json",
+                    response.as_bytes(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+    
+        let registered_user = self.service.register_user(req_data).await;
+    
+        let response_bytes = serde_json::to_vec(&registered_user)?;
+        send_response(
+            stream,
+            StatusCode::Created,
+            "application/json",
+            &response_bytes,
+        )
+        .await?;
+        Ok(())
+    }
+    
+    pub async fn get_user(&self, request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+        let id = request.path
+            .split('?')
+            .nth(1)
+            .and_then(|query| {
+                query.split('&')
+                    .find(|pair| pair.starts_with("id="))
+                    .and_then(|pair| pair.split('=').nth(1))
+                    .map(|val| val.to_string())
+            });
 
-async fn create_account(_request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
-    let response = r#"{"message": "User registered successfully", "id": 1}"#;
-    send_response(
-        stream,
-        StatusCode::Created,
-        "application/json",
-        response.as_bytes(),
-    )
-    .await?;
-    Ok(())
-}
+        let id = match id {
+            Some(val) => val,
+            None => {
+                let response_json = r#"{"error": "Missing id parameter"}"#;
+                send_response(
+                    stream,
+                    StatusCode::BadRequest,
+                    "application/json",
+                    response_json.as_bytes(),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
 
-async fn get_user(_request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
-    let response = r#"{"id": 1, "username": "rust_learner", "email": "rust@example.com"}"#;
-    send_response(
-        stream,
-        StatusCode::Ok,
-        "application/json",
-        response.as_bytes(),
-    )
-    .await?;
-    Ok(())
+        if let Some(user) = self.service.get_user(&id).await {
+            let response_bytes = serde_json::to_vec(&user)?;
+            send_response(
+                stream,
+                StatusCode::Ok,
+                "application/json",
+                &response_bytes,
+            )
+            .await?;
+        } else {
+            let response_json = r#"{"error": "User not found"}"#;
+            send_response(
+                stream,
+                StatusCode::NotFound,
+                "application/json",
+                response_json.as_bytes(),
+            )
+            .await?;
+        }
+        Ok(())
+    }
 }
 
 pub async fn not_found(stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {

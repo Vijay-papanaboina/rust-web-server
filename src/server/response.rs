@@ -2,8 +2,8 @@ use std::error::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
+#[allow(unused)]
 pub enum StatusCode {
     Ok,
     Created,

@@ -1,8 +1,16 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Debug)]
+pub struct UserRecord {
+    pub id: String,
+    pub username: String,
+    pub email: String,
+    pub password: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
-    pub username: String,
+    pub email: String,
     pub password: String,
 }
 
@@ -13,9 +21,9 @@ pub struct CreateAccountRequest {
     pub password: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserResponse {
-    pub id: u64,
+    pub id: String,
     pub username: String,
     pub email: String,
 }
