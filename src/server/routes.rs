@@ -12,20 +12,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub async fn route(
     controller: &Controller,
     request: &mut Request,
-    stream: &mut TcpStream,
+    mut stream: TcpStream,
 ) -> Result<(), Box<dyn Error>> {
     // Check request path ignoring query parameters for matching routes
     let path = request.path.split('?').next().unwrap_or("/");
 
     match (request.method.as_str(), path) {
-        ("GET", "/") => controller.index(request, stream).await,
-        ("POST", "/login") => controller.login(request, stream).await,
-        ("POST", "/register") => controller.create_account(request, stream).await,
+        ("GET", "/") => controller.index(request, &mut stream).await,
+        ("POST", "/login") => controller.login(request, &mut stream).await,
+        ("POST", "/register") => controller.create_account(request, &mut stream).await,
         ("GET", "/user") => {
-            controller.middleware.check_auth(request, stream).await?;
-            controller.get_user(request, stream).await
+            controller.middleware.check_auth(request, &mut stream).await?;
+            controller.get_user(request, &mut stream).await
         }
-        _ => not_found(stream).await,
+        ("GET", "/ws") => {
+            crate::server::websocket::handle_ws(request, stream).await
+        }
+        _ => not_found(&mut stream).await,
     }
 }
 

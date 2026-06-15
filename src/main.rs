@@ -61,8 +61,8 @@ async fn main() {
     }
 }
 
-async fn handle_connection(controller: &Controller, mut stream: TcpStream) {
-    if let Err(e) = handle_request(controller, &mut stream).await {
+async fn handle_connection(controller: &Controller, stream: TcpStream) {
+    if let Err(e) = handle_request(controller, stream).await {
         eprintln!("Error handling connection: {}", e);
     }
 }
