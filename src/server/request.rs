@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::net::TcpStream;
 
+use crate::server::jwt::Claims;
 use crate::server::middleware;
 use crate::server::routes;
 use crate::server::routes::Controller;
@@ -15,6 +16,7 @@ pub struct Request {
     pub version: String,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
+    pub user: Option<Claims>,
 }
 
 impl std::fmt::Debug for Request {
@@ -61,9 +63,9 @@ impl Request {
 }
 
 pub async fn handle_request(controller: &Controller, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
-    if let Some(request) = parse_request(stream).await {
+    if let Some(mut request) = parse_request(stream).await {
         middleware::logger(&request);
-        routes::route(controller, &request, stream).await?;
+        routes::route(controller, &mut request, stream).await?;
     } else {
         routes::not_found(stream).await?;
     }
@@ -117,5 +119,6 @@ async fn parse_request(stream: &mut TcpStream) -> Option<Request> {
         version,
         headers,
         body,
+        user: None,
     });
 }

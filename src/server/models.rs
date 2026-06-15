@@ -27,3 +27,11 @@ pub struct UserResponse {
     pub username: String,
     pub email: String,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LoginResponse {
+    pub id: String,
+    pub username: String,
+    pub email: String,
+    pub token: String,
+}
