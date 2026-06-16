@@ -2,12 +2,12 @@ use std::error::Error;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 
+use crate::server::jwt::Claims;
 use crate::server::middleware::Middleware;
 use crate::server::models::{CreateAccountRequest, LoginRequest, LoginResponse};
 use crate::server::request::Request;
 use crate::server::response::{StatusCode, send_response};
 use crate::server::services::Service;
-use crate::server::jwt::Claims;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub async fn route(
@@ -23,7 +23,10 @@ pub async fn route(
         ("POST", "/login") => controller.login(request, &mut stream).await,
         ("POST", "/register") => controller.create_account(request, &mut stream).await,
         ("GET", "/user") => {
-            controller.middleware.check_auth(request, &mut stream).await?;
+            controller
+                .middleware
+                .check_auth(request, &mut stream)
+                .await?;
             controller.get_user(request, &mut stream).await
         }
         ("GET", "/ws") => controller.ws_upgrade(request, stream).await,
@@ -86,7 +89,12 @@ impl Controller {
                     sub: user.id.to_string(),
                     exp,
                 };
-                let token = match self.middleware.jwt.encode(&claims).map_err(|e| e.to_string()) {
+                let token = match self
+                    .middleware
+                    .jwt
+                    .encode(&claims)
+                    .map_err(|e| e.to_string())
+                {
                     Ok(t) => t,
                     Err(err_msg) => {
                         eprintln!("JWT encode error: {}", err_msg);

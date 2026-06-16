@@ -63,11 +63,12 @@ impl UserRepo {
     pub async fn get_user_by_id(&self, id: &uuid::Uuid) -> Option<UserRecord> {
         match sqlx::query_as::<_, UserRecord>(
             "SELECT * FROM users
-             WHERE id = $1"
+             WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
-        .await {
+        .await
+        {
             Ok(user) => user,
             Err(e) => {
                 eprintln!("Database error in get_user_by_id: {:?}", e);

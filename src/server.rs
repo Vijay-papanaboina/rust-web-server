@@ -1,10 +1,10 @@
-pub mod request;
-pub mod routes;
-pub mod response;
+pub mod chat;
+pub mod jwt;
 pub mod middleware;
 pub mod models;
 pub mod repo;
+pub mod request;
+pub mod response;
+pub mod routes;
 pub mod services;
-pub mod jwt;
 pub mod websocket;
-pub mod chat;

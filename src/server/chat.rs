@@ -1,6 +1,6 @@
+use crate::server::websocket::{Message, WsEvent, WsReceiver, WsSender};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use crate::server::websocket::{Message, WsSender, WsReceiver, WsEvent};
 
 pub struct ChatManager {
     state: Mutex<ChatState>,
@@ -33,10 +33,18 @@ impl ChatManager {
 
             while let Some(event) = receiver.recv().await {
                 match event {
-                    WsEvent::Connect { socket_id, handshake, sender } => {
-                        let chat_id = handshake.query_params.get("chat_id")
+                    WsEvent::Connect {
+                        socket_id,
+                        handshake,
+                        sender,
+                    } => {
+                        let chat_id = handshake
+                            .query_params
+                            .get("chat_id")
                             .and_then(|s| s.parse::<usize>().ok());
-                        let user_id = handshake.query_params.get("user_id")
+                        let user_id = handshake
+                            .query_params
+                            .get("user_id")
                             .and_then(|s| s.parse::<usize>().ok());
 
                         if let (Some(chat_id), Some(user_id)) = (chat_id, user_id) {
@@ -47,14 +55,22 @@ impl ChatManager {
                             state.users.insert(socket_id, user_id);
                             state.socket_to_chat.insert(socket_id, chat_id);
                             state.senders.insert(socket_id, sender);
-                            println!("Client {} (User {}) connected to Chat {}", socket_id, user_id, chat_id);
+                            println!(
+                                "Client {} (User {}) connected to Chat {}",
+                                socket_id, user_id, chat_id
+                            );
                         } else {
-                            println!("Connection rejected for socket {}: invalid parameters", socket_id);
+                            println!(
+                                "Connection rejected for socket {}: invalid parameters",
+                                socket_id
+                            );
                             break;
                         }
                     }
                     WsEvent::Message(msg) => {
-                        if let (Some(socket_id), Some(chat_id)) = (current_socket_id, current_chat_id) {
+                        if let (Some(socket_id), Some(chat_id)) =
+                            (current_socket_id, current_chat_id)
+                        {
                             chat_manager.send_message(chat_id, socket_id, msg);
                         }
                     }

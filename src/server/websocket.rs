@@ -1,16 +1,13 @@
-use std::error::Error;
 use std::collections::HashMap;
+use std::error::Error;
 
+use base64::{Engine, engine::general_purpose as b64};
+use sha1::{Digest, Sha1};
 use tokio::sync::mpsc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{
-        TcpStream,
-        tcp::OwnedReadHalf,
-    },
+    net::{TcpStream, tcp::OwnedReadHalf},
 };
-use base64::{Engine, engine::general_purpose as b64};
-use sha1::{Digest, Sha1};
 
 use crate::server::request::Request;
 
@@ -91,14 +88,14 @@ pub async fn upgrade(
 
     upgrade_ws(request, &mut stream).await?;
     let (stream_read, stream_write) = stream.into_split();
-    
+
     let socket_id = NEXT_SOCKET_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     let handshake = Handshake {
         query_params: request.query_params.clone(),
         headers: request.headers.clone(),
     };
-    
+
     let (tx_out, rx_out) = mpsc::unbounded_channel::<Message>();
     let (tx_in, rx_in) = mpsc::unbounded_channel::<WsEvent>();
 
@@ -175,7 +172,7 @@ pub async fn upgrade(
                 }
             }
 
-        // Read the payload
+            // Read the payload
             let mut payload = vec![0u8; actual_payload_len as usize];
             match read_exact_or_eof(&mut stream_read, &mut payload).await {
                 Ok(true) => break, // EOF
@@ -186,12 +183,12 @@ pub async fn upgrade(
                 }
             }
 
-        // Unmask the payload
+            // Unmask the payload
             for i in 0..payload.len() {
                 payload[i] ^= mask_key[i % 4];
             }
 
-        // Handle Control Frames (opcode >= 8)
+            // Handle Control Frames (opcode >= 8)
             if opcode >= 8 {
                 match opcode {
                     8 => {
@@ -202,7 +199,10 @@ pub async fn upgrade(
                         let _ = tx_out.send(Message::Pong(payload));
                     }
                     10 => {
-                        if tx_in.send(WsEvent::Message(Message::Pong(payload))).is_err() {
+                        if tx_in
+                            .send(WsEvent::Message(Message::Pong(payload)))
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -213,7 +213,7 @@ pub async fn upgrade(
                 continue;
             }
 
-        // Handle Data Frames (opcode < 8)
+            // Handle Data Frames (opcode < 8)
             message_buffer.extend_from_slice(&payload);
 
             if is_fin {
@@ -245,7 +245,10 @@ pub async fn upgrade(
     Ok(WsReceiver { rx: rx_in })
 }
 
-async fn upgrade_ws(request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn upgrade_ws(
+    request: &Request,
+    stream: &mut TcpStream,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let web_socket_key = request
         .headers
         .get("Sec-WebSocket-Key")

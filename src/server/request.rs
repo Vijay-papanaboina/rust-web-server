@@ -64,7 +64,10 @@ impl Request {
     }
 }
 
-pub async fn handle_request(controller: &Controller, mut stream: TcpStream) -> Result<(), Box<dyn Error>> {
+pub async fn handle_request(
+    controller: &Controller,
+    mut stream: TcpStream,
+) -> Result<(), Box<dyn Error>> {
     if let Some(mut request) = parse_request(&mut stream).await {
         middleware::logger(&request);
         routes::route(controller, &mut request, stream).await?;

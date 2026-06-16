@@ -1,17 +1,17 @@
-use std::sync::Arc;
-use std::env;
 use sqlx::PgPool;
+use std::env;
+use std::sync::Arc;
 
 use tokio::net::{TcpListener, TcpStream};
 
 mod server;
 
+use server::jwt::Jwt;
+use server::middleware::Middleware;
+use server::repo::UserRepo;
 use server::request::handle_request;
 use server::routes::Controller;
 use server::services::Service;
-use server::repo::UserRepo;
-use server::middleware::Middleware;
-use server::jwt::Jwt;
 
 #[tokio::main]
 async fn main() {
@@ -32,7 +32,7 @@ async fn main() {
             password VARCHAR(255) NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );"
+        );",
     )
     .execute(&pool)
     .await
@@ -57,7 +57,7 @@ async fn main() {
 
         let controller = controller.clone();
         tokio::spawn(async move {
-            handle_connection(&controller,stream).await;
+            handle_connection(&controller, stream).await;
         });
     }
 }
