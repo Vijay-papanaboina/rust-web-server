@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::sync::Arc;
 use tokio::net::TcpStream;
 
 use crate::server::middleware::Middleware;
@@ -25,9 +26,7 @@ pub async fn route(
             controller.middleware.check_auth(request, &mut stream).await?;
             controller.get_user(request, &mut stream).await
         }
-        ("GET", "/ws") => {
-            crate::server::websocket::handle_ws(request, stream).await
-        }
+        ("GET", "/ws") => controller.ws_upgrade(request, stream).await,
         _ => not_found(&mut stream).await,
     }
 }
@@ -35,13 +34,19 @@ pub async fn route(
 pub struct Controller {
     pub service: Service,
     pub middleware: Middleware,
+    pub chat_manager: Arc<crate::server::chat::ChatManager>,
 }
 
 impl Controller {
-    pub fn new(service: Service, middleware: Middleware) -> Self {
+    pub fn new(
+        service: Service,
+        middleware: Middleware,
+        chat_manager: Arc<crate::server::chat::ChatManager>,
+    ) -> Self {
         Self {
             service,
             middleware,
+            chat_manager,
         }
     }
 
@@ -201,6 +206,22 @@ impl Controller {
                 response_json.as_bytes(),
             )
             .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn ws_upgrade(
+        &self,
+        request: &Request,
+        stream: TcpStream,
+    ) -> Result<(), Box<dyn Error>> {
+        match crate::server::websocket::upgrade(request, stream).await {
+            Ok(receiver) => {
+                self.chat_manager.handle_connection(receiver);
+            }
+            Err(e) => {
+                eprintln!("WebSocket upgrade failed: {}", e);
+            }
         }
         Ok(())
     }

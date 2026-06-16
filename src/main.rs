@@ -43,7 +43,8 @@ async fn main() {
     let middleware = Middleware::new(jwt);
     let repo = UserRepo::new(pool);
     let service = Service::new(repo);
-    let controller = Arc::new(Controller::new(service, middleware));
+    let chat_manager = Arc::new(server::chat::ChatManager::new());
+    let controller = Arc::new(Controller::new(service, middleware, chat_manager));
 
     loop {
         let (stream, _) = match listener.accept().await {

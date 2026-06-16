@@ -1,27 +1,65 @@
-use std::collections::HashMap;
 use std::error::Error;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::collections::HashMap;
 
-use base64::{Engine, engine::general_purpose as b64};
-use sha1::{Digest, Sha1};
 use tokio::sync::mpsc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
         TcpStream,
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
+        tcp::OwnedReadHalf,
     },
 };
+use base64::{Engine, engine::general_purpose as b64};
+use sha1::{Digest, Sha1};
 
 use crate::server::request::Request;
 
-static SOCKETS: LazyLock<Mutex<HashMap<usize, mpsc::UnboundedSender<Vec<u8>>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-static NEXT_SOCKET_ID: AtomicUsize = AtomicUsize::new(1);
-static CHATS: LazyLock<Mutex<HashMap<usize, Vec<usize>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-static USERS: LazyLock<Mutex<HashMap<usize, usize>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+#[derive(Debug, Clone)]
+pub enum Message {
+    Text(String),
+    Binary(Vec<u8>),
+    #[allow(dead_code)]
+    Ping(Vec<u8>),
+    Pong(Vec<u8>),
+    Close,
+}
+
+pub struct WsSender {
+    tx: mpsc::UnboundedSender<Message>,
+}
+
+pub struct WsReceiver {
+    rx: mpsc::UnboundedReceiver<WsEvent>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct Handshake {
+    pub query_params: HashMap<String, String>,
+    pub headers: HashMap<String, String>,
+}
+
+pub enum WsEvent {
+    Connect {
+        socket_id: usize,
+        handshake: Handshake,
+        sender: WsSender,
+    },
+    Message(Message),
+    Disconnect,
+}
+
+impl WsSender {
+    pub fn send(&self, msg: Message) -> Result<(), mpsc::error::SendError<Message>> {
+        self.tx.send(msg)
+    }
+}
+
+impl WsReceiver {
+    pub async fn recv(&mut self) -> Option<WsEvent> {
+        self.rx.recv().await
+    }
+}
 
 fn make_ws_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
     let mut frame = Vec::new();
@@ -30,142 +68,184 @@ fn make_ws_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
     if payload.len() <= 125 {
         frame.push(first_byte);
         frame.push(payload.len() as u8);
-        frame.extend_from_slice(&payload);
+        frame.extend_from_slice(payload);
     } else if payload.len() <= 65535 {
         frame.push(first_byte);
         frame.push(126);
         frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
-        frame.extend_from_slice(&payload);
+        frame.extend_from_slice(payload);
     } else {
         frame.push(first_byte);
         frame.push(127);
         frame.extend_from_slice(&(payload.len() as u64).to_be_bytes());
-        frame.extend_from_slice(&payload);
+        frame.extend_from_slice(payload);
     }
     frame
 }
 
-pub fn broadcast(opcode: u8, payload: &[u8], chat_id: usize, sender_id: usize) {
-    let frame = make_ws_frame(opcode, payload);
-    let sockets = SOCKETS.lock().unwrap();
-    let chats = CHATS.lock().unwrap();
-    if let Some(chat_members) = chats.get(&chat_id) {
-        for (&id, tx) in sockets.iter() {
-            if chat_members.contains(&id) && id != sender_id {
-                tx.send(frame.clone()).ok();
+pub async fn upgrade(
+    request: &Request,
+    mut stream: TcpStream,
+) -> Result<WsReceiver, Box<dyn Error + Send + Sync>> {
+    static NEXT_SOCKET_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+
+    upgrade_ws(request, &mut stream).await?;
+    let (stream_read, stream_write) = stream.into_split();
+    
+    let socket_id = NEXT_SOCKET_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    let handshake = Handshake {
+        query_params: request.query_params.clone(),
+        headers: request.headers.clone(),
+    };
+    
+    let (tx_out, rx_out) = mpsc::unbounded_channel::<Message>();
+    let (tx_in, rx_in) = mpsc::unbounded_channel::<WsEvent>();
+
+    let _ = tx_in.send(WsEvent::Connect {
+        socket_id,
+        handshake,
+        sender: WsSender { tx: tx_out.clone() },
+    });
+
+    // Spawn the writer task
+    tokio::spawn(async move {
+        let mut stream_write = stream_write;
+        let mut rx_out = rx_out;
+        while let Some(msg) = rx_out.recv().await {
+            let frame = match msg {
+                Message::Text(ref s) => make_ws_frame(1u8, s.as_bytes()),
+                Message::Binary(ref b) => make_ws_frame(2u8, b.as_slice()),
+                Message::Ping(ref p) => make_ws_frame(9u8, p.as_slice()),
+                Message::Pong(ref p) => make_ws_frame(10u8, p.as_slice()),
+                Message::Close => make_ws_frame(8u8, &[]),
+            };
+            if stream_write.write_all(&frame).await.is_err() {
+                break;
             }
         }
-    }
-}
+    });
 
-pub async fn handle_ws(request: &Request, mut stream: TcpStream) -> Result<(), Box<dyn Error>> {
-    let chat_id = request
-        .query_params
-        .get("chat_id")
-        .ok_or("Missing chat_id parameter")?
-        .parse::<usize>()?;
-    let user_id = request
-        .query_params
-        .get("user_id")
-        .ok_or("Missing user_id parameter")?
-        .parse::<usize>()?;
-    upgrade_ws(request, &mut stream).await?;
-    let (mut stream_read, stream_write) = stream.into_split();
-    let (client_id, tx) = register_client(stream_write, chat_id, user_id);
+    // Spawn the reader task
+    let tx_out_clone = tx_out.clone();
+    tokio::spawn(async move {
+        let mut stream_read = stream_read;
+        let mut message_buffer: Vec<u8> = Vec::new();
+        let mut message_opcode: u8 = 0;
+        let tx_in = tx_in;
+        let tx_out = tx_out_clone;
 
-    let mut message_buffer: Vec<u8> = Vec::new();
-    let mut message_opcode: u8 = 0;
-    loop {
-        let mut header = [0u8; 2];
-        if read_exact_or_eof(&mut stream_read, &mut header).await? {
-            break;
-        }
-        let (is_fin, opcode, has_mask, payload_len) = parse_frame_header(&header);
-
-        if !has_mask {
-            // Section 5.1: Close the connection if a client sends an unmasked frame
-            println!("Client sent an unmasked frame. Disconnecting.");
-            break;
-        }
-
-        if opcode != 0 && opcode < 8 && opcode != message_opcode {
-            message_opcode = opcode;
-        }
-
-        let actual_payload_len = get_payload_len(payload_len, &mut stream_read).await?;
-
-        // Read the 4-byte masking key
-        let mut mask_key = [0u8; 4];
-        if read_exact_or_eof(&mut stream_read, &mut mask_key).await? {
-            break;
-        }
-
-        // Read the payload
-        let mut payload = vec![0u8; actual_payload_len as usize];
-        if read_exact_or_eof(&mut stream_read, &mut payload).await? {
-            break;
-        }
-
-        // Unmask the payload
-        for i in 0..payload.len() {
-            payload[i] ^= mask_key[i % 4];
-        }
-
-        // Handle Control Frames (opcode >= 8)
-        if opcode >= 8 {
-            match opcode {
-                8 => {
-                    println!("Close frame");
+        loop {
+            let mut header = [0u8; 2];
+            match read_exact_or_eof(&mut stream_read, &mut header).await {
+                Ok(true) => break, // EOF
+                Ok(false) => {}
+                Err(e) => {
+                    eprintln!("Error reading header: {}", e);
                     break;
                 }
-                9 => {
-                    println!("Received Ping, replying with Pong");
-                    let pong_frame = make_ws_frame(10, &payload);
-                    tx.send(pong_frame).ok();
+            }
+            let (is_fin, opcode, has_mask, payload_len) = parse_frame_header(&header);
+
+            if !has_mask {
+                eprintln!("Client sent an unmasked frame. Disconnecting.");
+                let _ = tx_out.send(Message::Close);
+                break;
+            }
+
+            if opcode != 0 && opcode < 8 && opcode != message_opcode {
+                message_opcode = opcode;
+            }
+
+            let actual_payload_len = match get_payload_len(payload_len, &mut stream_read).await {
+                Ok(len) => len,
+                Err(e) => {
+                    eprintln!("Error getting payload length: {}", e);
+                    break;
                 }
-                10 => {
-                    println!("Received Pong");
-                }
-                _ => {
-                    println!("Unknown control frame: {}", opcode);
+            };
+
+            let mut mask_key = [0u8; 4];
+            match read_exact_or_eof(&mut stream_read, &mut mask_key).await {
+                Ok(true) => break, // EOF
+                Ok(false) => {}
+                Err(e) => {
+                    eprintln!("Error reading mask key: {}", e);
+                    break;
                 }
             }
-            continue;
-        }
 
-        // Handle Data Frames (opcode < 8)
-        message_buffer.extend_from_slice(&payload);
-
-        if is_fin {
-            match message_opcode {
-                0 => {
-                    println!("Continuation frame");
+        // Read the payload
+            let mut payload = vec![0u8; actual_payload_len as usize];
+            match read_exact_or_eof(&mut stream_read, &mut payload).await {
+                Ok(true) => break, // EOF
+                Ok(false) => {}
+                Err(e) => {
+                    eprintln!("Error reading payload: {}", e);
+                    break;
                 }
-                1 => {
-                    println!("Text frame");
-                    if let Ok(text) = String::from_utf8(message_buffer.clone()) {
-                        println!("Received text: {}", text);
-                        broadcast(1, &message_buffer, chat_id, client_id);
+            }
+
+        // Unmask the payload
+            for i in 0..payload.len() {
+                payload[i] ^= mask_key[i % 4];
+            }
+
+        // Handle Control Frames (opcode >= 8)
+            if opcode >= 8 {
+                match opcode {
+                    8 => {
+                        let _ = tx_out.send(Message::Close);
+                        break;
+                    }
+                    9 => {
+                        let _ = tx_out.send(Message::Pong(payload));
+                    }
+                    10 => {
+                        if tx_in.send(WsEvent::Message(Message::Pong(payload))).is_err() {
+                            break;
+                        }
+                    }
+                    _ => {
+                        eprintln!("Unknown control frame: {}", opcode);
                     }
                 }
-                2 => {
-                    println!("Received binary of length {}", message_buffer.len());
-                    broadcast(2, &message_buffer, chat_id, client_id);
-                }
-                _ => {
-                    println!("Unknown opcode");
-                }
+                continue;
             }
 
-            message_opcode = 0;
-            message_buffer = Vec::new();
+        // Handle Data Frames (opcode < 8)
+            message_buffer.extend_from_slice(&payload);
+
+            if is_fin {
+                let msg = match message_opcode {
+                    1 => {
+                        if let Ok(text) = String::from_utf8(message_buffer.clone()) {
+                            Some(Message::Text(text))
+                        } else {
+                            None
+                        }
+                    }
+                    2 => Some(Message::Binary(message_buffer.clone())),
+                    _ => None,
+                };
+
+                if let Some(msg) = msg {
+                    if tx_in.send(WsEvent::Message(msg)).is_err() {
+                        break;
+                    }
+                }
+
+                message_opcode = 0;
+                message_buffer.clear();
+            }
         }
-    }
-    unregister_client(client_id);
-    Ok(())
+        let _ = tx_in.send(WsEvent::Disconnect);
+    });
+
+    Ok(WsReceiver { rx: rx_in })
 }
 
-async fn upgrade_ws(request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+async fn upgrade_ws(request: &Request, stream: &mut TcpStream) -> Result<(), Box<dyn Error + Send + Sync>> {
     let web_socket_key = request
         .headers
         .get("Sec-WebSocket-Key")
@@ -192,17 +272,13 @@ fn parse_frame_header(header: &[u8]) -> (bool, u8, bool, u64) {
     let opcode = header[0] & 0b00001111;
     let has_mask = (header[1] >> 7) == 1;
     let payload_len = header[1] & 0b01111111;
-    println!("is_fin: {}", is_fin);
-    println!("opcode: {}", opcode);
-    println!("has_mask: {}", has_mask);
-    println!("payload_len: {}\n", payload_len);
     (is_fin, opcode, has_mask, payload_len as u64)
 }
 
 async fn read_exact_or_eof(
     stream: &mut OwnedReadHalf,
     buf: &mut [u8],
-) -> Result<bool, Box<dyn Error>> {
+) -> Result<bool, Box<dyn Error + Send + Sync>> {
     match stream.read_exact(buf).await {
         Ok(_) => Ok(false),
         Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(true),
@@ -213,7 +289,7 @@ async fn read_exact_or_eof(
 async fn get_payload_len(
     payload_len: u64,
     stream: &mut OwnedReadHalf,
-) -> Result<u64, Box<dyn Error>> {
+) -> Result<u64, Box<dyn Error + Send + Sync>> {
     if payload_len <= 125 {
         Ok(payload_len)
     } else if payload_len == 126 {
@@ -227,43 +303,4 @@ async fn get_payload_len(
     } else {
         Ok(0)
     }
-}
-
-fn register_client(
-    stream_write: OwnedWriteHalf,
-    chat_id: usize,
-    user_id: usize,
-) -> (usize, mpsc::UnboundedSender<Vec<u8>>) {
-    let socket_id = NEXT_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-
-    // Spawn the writer task to handle writing out to the socket
-    tokio::spawn(async move {
-        let mut stream_write = stream_write;
-        while let Some(msg) = rx.recv().await {
-            if stream_write.write_all(&msg).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    SOCKETS.lock().unwrap().insert(socket_id, tx.clone());
-    CHATS
-        .lock()
-        .unwrap()
-        .entry(chat_id)
-        .or_insert(Vec::new())
-        .push(socket_id);
-    USERS.lock().unwrap().insert(socket_id, user_id);
-    println!("Client {} connected", socket_id);
-    (socket_id, tx)
-}
-
-fn unregister_client(socket_id: usize) {
-    println!("Client {} disconnected", socket_id);
-    SOCKETS.lock().unwrap().remove(&socket_id);
-    USERS.lock().unwrap().remove(&socket_id);
-    CHATS.lock().unwrap().values_mut().for_each(|clients| {
-        clients.retain(|&id| id != socket_id);
-    });
 }
