@@ -9,8 +9,8 @@ mod server;
 use server::jwt::Jwt;
 use server::middleware::Middleware;
 use server::repo::UserRepo;
-use server::request::handle_request;
-use server::routes::Controller;
+use server::request::Request;
+use server::routes::{self, Controller};
 use server::services::Service;
 
 #[tokio::main]
@@ -62,8 +62,17 @@ async fn main() {
     }
 }
 
-async fn handle_connection(controller: &Controller, stream: TcpStream) {
-    if let Err(e) = handle_request(controller, stream).await {
-        eprintln!("Error handling connection: {}", e);
+async fn handle_connection(controller: &Controller, mut stream: TcpStream) {
+    match Request::parse(&mut stream).await {
+        Ok(mut request) => {
+            server::middleware::logger(&request);
+            if let Err(e) = routes::route(controller, &mut request, stream).await {
+                eprintln!("Error routing request: {}", e);
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to parse request: {}", e);
+            let _ = routes::not_found(&mut stream).await;
+        }
     }
 }

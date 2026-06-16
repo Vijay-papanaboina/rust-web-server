@@ -1,13 +1,10 @@
 use serde::{self, Deserialize, Serialize};
 use std::collections::HashMap;
+use std::error::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::net::TcpStream;
 
 use crate::server::jwt::Claims;
-use crate::server::middleware;
-use crate::server::routes;
-use crate::server::routes::Controller;
-use std::error::Error;
 
 #[derive(Serialize, Deserialize)]
 pub struct Request {
@@ -62,80 +59,65 @@ impl Request {
             }
         }
     }
-}
 
-pub async fn handle_request(
-    controller: &Controller,
-    mut stream: TcpStream,
-) -> Result<(), Box<dyn Error>> {
-    if let Some(mut request) = parse_request(&mut stream).await {
-        middleware::logger(&request);
-        routes::route(controller, &mut request, stream).await?;
-    } else {
-        routes::not_found(&mut stream).await?;
-    }
-    Ok(())
-}
-
-async fn parse_request(stream: &mut TcpStream) -> Option<Request> {
-    let buf_reader = BufReader::new(stream);
-    let mut lines = buf_reader.lines();
-    let mut http_request = Vec::new();
-    while let Some(line) = lines.next_line().await.ok() {
-        let line = line?;
-        if line.is_empty() {
-            break;
+    pub async fn parse(stream: &mut TcpStream) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        let buf_reader = BufReader::new(stream);
+        let mut lines = buf_reader.lines();
+        let mut http_request = Vec::new();
+        while let Some(line) = lines.next_line().await? {
+            if line.is_empty() {
+                break;
+            }
+            http_request.push(line);
         }
-        http_request.push(line);
-    }
-    if http_request.is_empty() {
-        println!("Malformed Request!");
-        return None;
-    }
-    let request_line = &http_request[0];
-    let mut parts = request_line.split_whitespace();
+        if http_request.is_empty() {
+            return Err("Empty or malformed HTTP request".into());
+        }
+        let request_line = &http_request[0];
+        let mut parts = request_line.split_whitespace();
 
-    let method = parts.next()?.to_string();
-    let fullpath = parts.next()?.to_string();
-    let mut fullpath = fullpath.split('?');
-    let path = fullpath.next()?.to_string();
-    let query_string = fullpath.next().unwrap_or("");
-    let query_params: HashMap<String, String> = query_string
-        .split('&')
-        .filter(|s| !s.is_empty())
-        .filter_map(|pair| {
-            pair.split_once('=')
-                .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        let method = parts.next().ok_or("Missing HTTP method")?.to_string();
+        let fullpath = parts.next().ok_or("Missing request path")?.to_string();
+        let mut fullpath = fullpath.split('?');
+        let path = fullpath.next().ok_or("Invalid path")?.to_string();
+        let query_string = fullpath.next().unwrap_or("");
+        let query_params: HashMap<String, String> = query_string
+            .split('&')
+            .filter(|s| !s.is_empty())
+            .filter_map(|pair| {
+                pair.split_once('=')
+                    .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+            })
+            .collect();
+        let version = parts.next().ok_or("Missing HTTP version")?.to_string();
+        let headers: HashMap<String, String> = http_request
+            .iter()
+            .skip(1)
+            .filter_map(|header| {
+                header
+                    .split_once(':')
+                    .map(|(key, value)| (key.trim().to_string(), value.trim().to_string()))
+            })
+            .collect();
+        let content_length = headers
+            .get("Content-Length")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0);
+
+        let mut body = vec![0; content_length];
+
+        if content_length > 0 {
+            let mut buf_reader = lines.into_inner();
+            buf_reader.read_exact(&mut body).await?;
+        }
+        Ok(Request {
+            method,
+            path,
+            query_params,
+            version,
+            headers,
+            body,
+            user: None,
         })
-        .collect();
-    let version = parts.next()?.to_string();
-    let headers: HashMap<String, String> = http_request
-        .iter()
-        .skip(1)
-        .filter_map(|header| {
-            header
-                .split_once(':')
-                .map(|(key, value)| (key.trim().to_string(), value.trim().to_string()))
-        })
-        .collect();
-    let content_length = headers
-        .get("Content-Length")
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(0);
-
-    let mut body = vec![0; content_length];
-
-    if content_length > 0 {
-        let mut buf_reader = lines.into_inner();
-        buf_reader.read_exact(&mut body).await.ok()?;
     }
-    return Some(Request {
-        method,
-        path,
-        query_params,
-        version,
-        headers,
-        body,
-        user: None,
-    });
 }
