@@ -1,21 +1,27 @@
-use std::error::Error;
-use std::sync::atomic::{AtomicUsize,Ordering};
-use std::sync::{Mutex,LazyLock};
 use std::collections::HashMap;
+use std::error::Error;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 use base64::{Engine, engine::general_purpose as b64};
 use sha1::{Digest, Sha1};
 use tokio::sync::mpsc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpStream,tcp::{OwnedReadHalf,OwnedWriteHalf}},
+    net::{
+        TcpStream,
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+    },
 };
 
 use crate::server::request::Request;
 
-static CLIENTS: LazyLock<Mutex<HashMap<usize, mpsc::UnboundedSender<Vec<u8>>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
-static NEXT_CLIENT_ID: AtomicUsize = AtomicUsize::new(1);
-
+static SOCKETS: LazyLock<Mutex<HashMap<usize, mpsc::UnboundedSender<Vec<u8>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static NEXT_SOCKET_ID: AtomicUsize = AtomicUsize::new(1);
+static CHATS: LazyLock<Mutex<HashMap<usize, Vec<usize>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static USERS: LazyLock<Mutex<HashMap<usize, usize>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn make_ws_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
     let mut frame = Vec::new();
@@ -39,22 +45,33 @@ fn make_ws_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
     frame
 }
 
-pub fn broadcast(opcode: u8, payload: &[u8], sender_id: usize) {
+pub fn broadcast(opcode: u8, payload: &[u8], chat_id: usize, sender_id: usize) {
     let frame = make_ws_frame(opcode, payload);
-    let clients = CLIENTS.lock().unwrap();
-    for (&id, tx) in clients.iter() {
-        if id != sender_id {
-            let _ = tx.send(frame.clone());
+    let sockets = SOCKETS.lock().unwrap();
+    let chats = CHATS.lock().unwrap();
+    if let Some(chat_members) = chats.get(&chat_id) {
+        for (&id, tx) in sockets.iter() {
+            if chat_members.contains(&id) && id != sender_id {
+                tx.send(frame.clone()).ok();
+            }
         }
     }
 }
 
 pub async fn handle_ws(request: &Request, mut stream: TcpStream) -> Result<(), Box<dyn Error>> {
-
+    let chat_id = request
+        .query_params
+        .get("chat_id")
+        .ok_or("Missing chat_id parameter")?
+        .parse::<usize>()?;
+    let user_id = request
+        .query_params
+        .get("user_id")
+        .ok_or("Missing user_id parameter")?
+        .parse::<usize>()?;
     upgrade_ws(request, &mut stream).await?;
     let (mut stream_read, stream_write) = stream.into_split();
-    let (client_id, tx) = register_client(stream_write);
-
+    let (client_id, tx) = register_client(stream_write, chat_id, user_id);
 
     let mut message_buffer: Vec<u8> = Vec::new();
     let mut message_opcode: u8 = 0;
@@ -118,7 +135,7 @@ pub async fn handle_ws(request: &Request, mut stream: TcpStream) -> Result<(), B
 
         // Handle Data Frames (opcode < 8)
         message_buffer.extend_from_slice(&payload);
-        
+
         if is_fin {
             match message_opcode {
                 0 => {
@@ -128,12 +145,12 @@ pub async fn handle_ws(request: &Request, mut stream: TcpStream) -> Result<(), B
                     println!("Text frame");
                     if let Ok(text) = String::from_utf8(message_buffer.clone()) {
                         println!("Received text: {}", text);
-                        broadcast(1, &message_buffer, client_id);
+                        broadcast(1, &message_buffer, chat_id, client_id);
                     }
                 }
                 2 => {
                     println!("Received binary of length {}", message_buffer.len());
-                    broadcast(2, &message_buffer, client_id);
+                    broadcast(2, &message_buffer, chat_id, client_id);
                 }
                 _ => {
                     println!("Unknown opcode");
@@ -182,7 +199,10 @@ fn parse_frame_header(header: &[u8]) -> (bool, u8, bool, u64) {
     (is_fin, opcode, has_mask, payload_len as u64)
 }
 
-async fn read_exact_or_eof(stream: &mut OwnedReadHalf, buf: &mut [u8]) -> Result<bool, Box<dyn Error>> {
+async fn read_exact_or_eof(
+    stream: &mut OwnedReadHalf,
+    buf: &mut [u8],
+) -> Result<bool, Box<dyn Error>> {
     match stream.read_exact(buf).await {
         Ok(_) => Ok(false),
         Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(true),
@@ -190,7 +210,10 @@ async fn read_exact_or_eof(stream: &mut OwnedReadHalf, buf: &mut [u8]) -> Result
     }
 }
 
-async fn get_payload_len(payload_len: u64, stream: &mut OwnedReadHalf) -> Result<u64, Box<dyn Error>> {
+async fn get_payload_len(
+    payload_len: u64,
+    stream: &mut OwnedReadHalf,
+) -> Result<u64, Box<dyn Error>> {
     if payload_len <= 125 {
         Ok(payload_len)
     } else if payload_len == 126 {
@@ -206,11 +229,14 @@ async fn get_payload_len(payload_len: u64, stream: &mut OwnedReadHalf) -> Result
     }
 }
 
-
-fn register_client(stream_write: OwnedWriteHalf) -> (usize, mpsc::UnboundedSender<Vec<u8>>) {
-    let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
+fn register_client(
+    stream_write: OwnedWriteHalf,
+    chat_id: usize,
+    user_id: usize,
+) -> (usize, mpsc::UnboundedSender<Vec<u8>>) {
+    let socket_id = NEXT_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    
+
     // Spawn the writer task to handle writing out to the socket
     tokio::spawn(async move {
         let mut stream_write = stream_write;
@@ -221,12 +247,23 @@ fn register_client(stream_write: OwnedWriteHalf) -> (usize, mpsc::UnboundedSende
         }
     });
 
-    CLIENTS.lock().unwrap().insert(client_id, tx.clone());
-    println!("Client {} connected", client_id);
-    (client_id, tx)
+    SOCKETS.lock().unwrap().insert(socket_id, tx.clone());
+    CHATS
+        .lock()
+        .unwrap()
+        .entry(chat_id)
+        .or_insert(Vec::new())
+        .push(socket_id);
+    USERS.lock().unwrap().insert(socket_id, user_id);
+    println!("Client {} connected", socket_id);
+    (socket_id, tx)
 }
 
-fn unregister_client(client_id: usize) {
-    println!("Client {} disconnected", client_id);
-    CLIENTS.lock().unwrap().remove(&client_id);
+fn unregister_client(socket_id: usize) {
+    println!("Client {} disconnected", socket_id);
+    SOCKETS.lock().unwrap().remove(&socket_id);
+    USERS.lock().unwrap().remove(&socket_id);
+    CHATS.lock().unwrap().values_mut().for_each(|clients| {
+        clients.retain(|&id| id != socket_id);
+    });
 }

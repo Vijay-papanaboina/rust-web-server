@@ -13,6 +13,7 @@ use std::error::Error;
 pub struct Request {
     pub method: String,
     pub path: String,
+    pub query_params: HashMap<String, String>,
     pub version: String,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
@@ -25,6 +26,7 @@ impl std::fmt::Debug for Request {
         f.debug_struct("Request")
             .field("method", &self.method)
             .field("path", &self.path)
+            .field("query_params", &self.query_params)
             .field("version", &self.version)
             .field("headers", &self.headers)
             .field("body_decoded", &body_decoded)
@@ -91,7 +93,18 @@ async fn parse_request(stream: &mut TcpStream) -> Option<Request> {
     let mut parts = request_line.split_whitespace();
 
     let method = parts.next()?.to_string();
-    let path = parts.next()?.to_string();
+    let fullpath = parts.next()?.to_string();
+    let mut fullpath = fullpath.split('?');
+    let path = fullpath.next()?.to_string();
+    let query_string = fullpath.next().unwrap_or("");
+    let query_params: HashMap<String, String> = query_string
+        .split('&')
+        .filter(|s| !s.is_empty())
+        .filter_map(|pair| {
+            pair.split_once('=')
+                .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        })
+        .collect();
     let version = parts.next()?.to_string();
     let headers: HashMap<String, String> = http_request
         .iter()
@@ -116,6 +129,7 @@ async fn parse_request(stream: &mut TcpStream) -> Option<Request> {
     return Some(Request {
         method,
         path,
+        query_params,
         version,
         headers,
         body,
