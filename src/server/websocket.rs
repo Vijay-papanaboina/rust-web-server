@@ -11,6 +11,10 @@ use tokio::{
 
 use http::Request;
 
+static NEXT_SOCKET_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+
+const MAX_FRAME_SIZE: u64 = 16 * 1024 * 1024; // 16 MB limit
+
 #[derive(Debug, Clone)]
 pub enum Message {
     Text(String),
@@ -84,8 +88,6 @@ pub async fn upgrade(
     request: &Request,
     mut stream: TcpStream,
 ) -> Result<WsReceiver, Box<dyn Error + Send + Sync>> {
-    static NEXT_SOCKET_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
-
     upgrade_ws(request, &mut stream).await?;
     let (stream_read, stream_write) = stream.into_split();
 
@@ -150,10 +152,6 @@ pub async fn upgrade(
                 break;
             }
 
-            if opcode != 0 && opcode < 8 && opcode != message_opcode {
-                message_opcode = opcode;
-            }
-
             let actual_payload_len = match get_payload_len(payload_len, &mut stream_read).await {
                 Ok(len) => len,
                 Err(e) => {
@@ -161,6 +159,60 @@ pub async fn upgrade(
                     break;
                 }
             };
+
+            // Limit check to prevent huge allocations (DoS protection)
+            if actual_payload_len > MAX_FRAME_SIZE {
+                eprintln!(
+                    "Payload length {} exceeds MAX_FRAME_SIZE. Disconnecting.",
+                    actual_payload_len
+                );
+                let _ = tx_out.send(Message::Close);
+                break;
+            }
+
+            // Control Frame checks (RFC requires FIN = true and payload_len <= 125)
+            if opcode >= 8 {
+                if !is_fin {
+                    eprintln!("Control frame must not be fragmented. Disconnecting.");
+                    let _ = tx_out.send(Message::Close);
+                    break;
+                }
+                if actual_payload_len > 125 {
+                    eprintln!(
+                        "Control frame payload length {} > 125. Disconnecting.",
+                        actual_payload_len
+                    );
+                    let _ = tx_out.send(Message::Close);
+                    break;
+                }
+            }
+
+            // Explicit fragmentation state machine check
+            if opcode == 1 || opcode == 2 {
+                if message_opcode != 0 {
+                    eprintln!(
+                        "Protocol error: new message started before completion of previous. Disconnecting."
+                    );
+                    let _ = tx_out.send(Message::Close);
+                    break;
+                }
+                message_opcode = opcode;
+            } else if opcode == 0 {
+                if message_opcode == 0 {
+                    eprintln!(
+                        "Protocol error: continuation frame received without starting data frame. Disconnecting."
+                    );
+                    let _ = tx_out.send(Message::Close);
+                    break;
+                }
+            } else if opcode >= 8 {
+                // Control frames are allowed to interleave between fragments of a fragmented message,
+                // so we don't clear/modify message_opcode here.
+            } else {
+                eprintln!("Unknown data frame opcode: {}. Disconnecting.", opcode);
+                let _ = tx_out.send(Message::Close);
+                break;
+            }
 
             let mut mask_key = [0u8; 4];
             match read_exact_or_eof(&mut stream_read, &mut mask_key).await {
@@ -219,13 +271,21 @@ pub async fn upgrade(
             if is_fin {
                 let msg = match message_opcode {
                     1 => {
-                        if let Ok(text) = String::from_utf8(message_buffer.clone()) {
+                        let buffer = std::mem::take(&mut message_buffer);
+                        if let Ok(text) = String::from_utf8(buffer) {
                             Some(Message::Text(text))
                         } else {
-                            None
+                            eprintln!(
+                                "Protocol error: Text frame contains invalid UTF-8. Disconnecting."
+                            );
+                            let _ = tx_out.send(Message::Close);
+                            break;
                         }
                     }
-                    2 => Some(Message::Binary(message_buffer.clone())),
+                    2 => {
+                        let buffer = std::mem::take(&mut message_buffer);
+                        Some(Message::Binary(buffer))
+                    }
                     _ => None,
                 };
 
@@ -236,7 +296,6 @@ pub async fn upgrade(
                 }
 
                 message_opcode = 0;
-                message_buffer.clear();
             }
         }
         let _ = tx_in.send(WsEvent::Disconnect);
@@ -249,6 +308,35 @@ async fn upgrade_ws(
     request: &Request,
     stream: &mut TcpStream,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    // 1. Stricter Handshake Validation (RFC 6455 Section 4.2.1)
+    if request.method != "GET" {
+        return Err("Must be GET request".into());
+    }
+
+    let upgrade = request
+        .headers
+        .get("Upgrade")
+        .ok_or("Missing Upgrade header")?;
+    if !upgrade.to_lowercase().contains("websocket") {
+        return Err("Upgrade is not websocket".into());
+    }
+
+    let connection = request
+        .headers
+        .get("Connection")
+        .ok_or("Missing Connection header")?;
+    if !connection.to_lowercase().contains("upgrade") {
+        return Err("Connection is not upgrade".into());
+    }
+
+    let version = request
+        .headers
+        .get("Sec-WebSocket-Version")
+        .ok_or("Missing Sec-WebSocket-Version")?;
+    if version != "13" {
+        return Err("Sec-WebSocket-Version must be 13".into());
+    }
+
     let web_socket_key = request
         .headers
         .get("Sec-WebSocket-Key")
