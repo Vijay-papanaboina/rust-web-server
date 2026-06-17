@@ -156,3 +156,6 @@ impl Request {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;
