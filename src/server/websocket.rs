@@ -9,7 +9,7 @@ use tokio::{
     net::{TcpStream, tcp::OwnedReadHalf},
 };
 
-use crate::server::request::Request;
+use http::Request;
 
 #[derive(Debug, Clone)]
 pub enum Message {

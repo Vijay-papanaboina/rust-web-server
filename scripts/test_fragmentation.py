@@ -1,6 +1,7 @@
 import socket
 import random
 import time
+import sys
 
 def make_frame(opcode, payload, is_fin=True):
     if isinstance(payload, str):
@@ -26,6 +27,19 @@ def make_frame(opcode, payload, is_fin=True):
     
     return header + mask + masked_payload
 
+def check_connection(s):
+    old_timeout = s.gettimeout()
+    s.settimeout(0.01)
+    try:
+        data = s.recv(1024)
+        if len(data) == 0:
+            print("Error: Connection closed by server!")
+            sys.exit(1)
+    except socket.timeout:
+        pass
+    finally:
+        s.settimeout(old_timeout)
+
 def main():
     host = "127.0.0.1"
     port = 7878
@@ -50,17 +64,22 @@ def main():
     print("Handshake Response:")
     print(response.decode('utf-8', errors='ignore'))
     
+    check_connection(s)
+    
     print("Sending Fragment 1 (Opcode: Text, FIN: False, Payload: 'Hello ')...")
     s.sendall(make_frame(opcode=1, payload="Hello ", is_fin=False))
     time.sleep(0.5)
+    check_connection(s)
     
     print("Sending Fragment 2 (Opcode: Continuation, FIN: False, Payload: 'beautiful ')...")
     s.sendall(make_frame(opcode=0, payload="beautiful ", is_fin=False))
     time.sleep(0.5)
+    check_connection(s)
     
     print("Sending Fragment 3 (Opcode: Continuation, FIN: True, Payload: 'fragmented world!')...")
     s.sendall(make_frame(opcode=0, payload="fragmented world!", is_fin=True))
     time.sleep(0.5)
+    check_connection(s)
     
     print("Sending Close Frame...")
     s.sendall(make_frame(opcode=8, payload="", is_fin=True))

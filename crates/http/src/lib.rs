@@ -1,10 +1,42 @@
-use serde::{self, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::error::Error;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
-use crate::server::jwt::Claims;
+pub mod response;
+
+#[derive(Default)]
+pub struct Extensions {
+    map: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+}
+
+impl Extensions {
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+
+    pub fn insert<T: Send + Sync + 'static>(&mut self, val: T) -> Option<T> {
+        self.map
+            .insert(TypeId::of::<T>(), Box::new(val))
+            .and_then(|boxed| boxed.downcast::<T>().ok().map(|boxed| *boxed))
+    }
+
+    pub fn get<T: 'static>(&self) -> Option<&T> {
+        self.map
+            .get(&TypeId::of::<T>())
+            .and_then(|boxed| boxed.downcast_ref::<T>())
+    }
+
+    pub fn get_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        self.map
+            .get_mut(&TypeId::of::<T>())
+            .and_then(|boxed| boxed.downcast_mut::<T>())
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct Request {
@@ -14,7 +46,8 @@ pub struct Request {
     pub version: String,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
-    pub user: Option<Claims>,
+    #[serde(skip)]
+    pub extensions: Extensions,
 }
 
 impl std::fmt::Debug for Request {
@@ -48,13 +81,15 @@ impl Request {
             Ok(data) => Some(data),
             Err(_) => {
                 let response = r#"{"error": "Invalid JSON payload"}"#;
-                let _ = crate::server::response::send_response(
-                    stream,
-                    crate::server::response::StatusCode::BadRequest,
-                    "application/json",
-                    response.as_bytes(),
-                )
-                .await;
+                let mut response_bytes = Vec::new();
+                response_bytes.extend_from_slice(b"HTTP/1.1 400 Bad Request\r\n");
+                response_bytes.extend_from_slice(b"Content-Type: application/json\r\n");
+                response_bytes.extend_from_slice(
+                    format!("Content-Length: {}\r\n", response.len()).as_bytes(),
+                );
+                response_bytes.extend_from_slice(b"\r\n");
+                response_bytes.extend_from_slice(response.as_bytes());
+                let _ = stream.write_all(&response_bytes).await;
                 None
             }
         }
@@ -117,7 +152,7 @@ impl Request {
             version,
             headers,
             body,
-            user: None,
+            extensions: Extensions::new(),
         })
     }
 }

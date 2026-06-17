@@ -1,8 +1,7 @@
 use crate::server::jwt::Jwt;
-use crate::server::request::Request;
-use crate::server::response::{StatusCode, send_response};
+use http::Request;
+use http::response::{Response, StatusCode};
 use std::error::Error;
-use tokio::net::TcpStream;
 
 pub struct Middleware {
     pub jwt: Jwt,
@@ -15,19 +14,15 @@ impl Middleware {
     pub async fn check_auth(
         &self,
         request: &mut Request,
-        stream: &mut TcpStream,
+        response: &mut Response,
     ) -> Result<(), Box<dyn Error>> {
         let auth_header = match request.headers.get("Authorization") {
             Some(header) => header,
             None => {
-                let response = r#"{"error": "Authorization header is missing"}"#;
-                let _ = send_response(
-                    stream,
-                    StatusCode::Unauthorized,
-                    "application/json",
-                    response.as_bytes(),
-                )
-                .await;
+                let response_body = r#"{"error": "Authorization header is missing"}"#;
+                response.status(StatusCode::UNAUTHORIZED);
+                response.headers.set("Content-Type", "application/json");
+                response.send(response_body.as_bytes()).await?;
                 return Err("Authorization header is missing".into());
             }
         };
@@ -39,19 +34,15 @@ impl Middleware {
             Ok(claims) => claims,
             Err(err_msg) => {
                 eprintln!("Error decoding token: {}", err_msg);
-                let response = r#"{"error": "Invalid token"}"#;
-                let _ = send_response(
-                    stream,
-                    StatusCode::Unauthorized,
-                    "application/json",
-                    response.as_bytes(),
-                )
-                .await;
+                let response_body = r#"{"error": "Invalid token"}"#;
+                response.status(StatusCode::UNAUTHORIZED);
+                response.headers.set("Content-Type", "application/json");
+                response.send(response_body.as_bytes()).await?;
                 return Err(format!("Invalid token: {}", err_msg).into());
             }
         };
 
-        request.user = Some(claims);
+        request.extensions.insert(claims);
         Ok(())
     }
 }

@@ -3,8 +3,6 @@ pub mod jwt;
 pub mod middleware;
 pub mod models;
 pub mod repo;
-pub mod request;
-pub mod response;
 pub mod routes;
 pub mod services;
 pub mod websocket;

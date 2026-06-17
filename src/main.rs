@@ -6,10 +6,10 @@ use tokio::net::{TcpListener, TcpStream};
 
 mod server;
 
+use http::Request;
 use server::jwt::Jwt;
 use server::middleware::Middleware;
 use server::repo::UserRepo;
-use server::request::Request;
 use server::routes::{self, Controller};
 use server::services::Service;
 
@@ -72,7 +72,8 @@ async fn handle_connection(controller: &Controller, mut stream: TcpStream) {
         }
         Err(e) => {
             eprintln!("Failed to parse request: {}", e);
-            let _ = routes::not_found(&mut stream).await;
+            let mut response = http::response::Response::new(stream);
+            let _ = routes::not_found(&mut response).await;
         }
     }
 }
