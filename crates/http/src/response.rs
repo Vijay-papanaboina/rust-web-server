@@ -38,6 +38,25 @@ impl StatusCode {
     }
 }
 
+fn capitalize_header_key(key: &str) -> String {
+    key.split('-')
+        .map(|word| {
+            if word.eq_ignore_ascii_case("websocket") {
+                "WebSocket".to_string()
+            } else {
+                let mut c = word.chars();
+                match c.next() {
+                    None => String::new(),
+                    Some(f) => {
+                        f.to_uppercase().collect::<String>() + c.as_str().to_lowercase().as_str()
+                    }
+                }
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("-")
+}
+
 pub struct Headers {
     pub map: HashMap<String, String>,
 }
@@ -51,11 +70,11 @@ impl Headers {
 
     pub fn set(&mut self, key: &str, value: &str) {
         self.map
-            .insert(key.trim().to_string(), value.trim().to_string());
+            .insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
     }
 
     pub fn get(&self, key: &str) -> Option<&String> {
-        self.map.get(key)
+        self.map.get(&key.to_ascii_lowercase())
     }
 }
 
@@ -91,13 +110,15 @@ impl Response {
     }
 
     pub async fn send(&mut self, body: &[u8]) -> Result<(), Box<dyn Error>> {
-        if self.headers.get("Content-Length").is_none() {
-            self.headers.set("Content-Length", &body.len().to_string());
+        if self.headers.get("content-length").is_none() {
+            self.headers.set("content-length", &body.len().to_string());
         }
 
         let mut response_bytes = format!("HTTP/1.1 {}\r\n", self.status_code.as_str()).into_bytes();
         for (key, value) in &self.headers.map {
-            response_bytes.extend_from_slice(format!("{}: {}\r\n", key, value).as_bytes());
+            let formatted_key = capitalize_header_key(key);
+            response_bytes
+                .extend_from_slice(format!("{}: {}\r\n", formatted_key, value).as_bytes());
         }
         response_bytes.extend_from_slice(b"\r\n");
         response_bytes.extend_from_slice(body);

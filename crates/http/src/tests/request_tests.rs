@@ -42,13 +42,13 @@ async fn test_request_parse() {
     assert_eq!(request.path, "/test");
     assert_eq!(request.query_params.get("name"), Some(&"rust".to_string()));
     assert_eq!(request.query_params.get("age"), Some(&"10".to_string()));
-    assert_eq!(request.headers.get("Host"), Some(&"localhost".to_string()));
+    assert_eq!(request.headers.get("host"), Some(&"localhost".to_string()));
     assert_eq!(
-        request.headers.get("Content-Type"),
+        request.headers.get("content-type"),
         Some(&"application/json".to_string())
     );
     assert_eq!(
-        request.headers.get("Content-Length"),
+        request.headers.get("content-length"),
         Some(&"17".to_string())
     );
     assert_eq!(request.body, b"{\"hello\":\"world\"}");

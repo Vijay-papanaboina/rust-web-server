@@ -315,7 +315,7 @@ async fn upgrade_ws(
 
     let upgrade = request
         .headers
-        .get("Upgrade")
+        .get("upgrade")
         .ok_or("Missing Upgrade header")?;
     if !upgrade.to_lowercase().contains("websocket") {
         return Err("Upgrade is not websocket".into());
@@ -323,7 +323,7 @@ async fn upgrade_ws(
 
     let connection = request
         .headers
-        .get("Connection")
+        .get("connection")
         .ok_or("Missing Connection header")?;
     if !connection.to_lowercase().contains("upgrade") {
         return Err("Connection is not upgrade".into());
@@ -331,7 +331,7 @@ async fn upgrade_ws(
 
     let version = request
         .headers
-        .get("Sec-WebSocket-Version")
+        .get("sec-websocket-version")
         .ok_or("Missing Sec-WebSocket-Version")?;
     if version != "13" {
         return Err("Sec-WebSocket-Version must be 13".into());
@@ -339,7 +339,7 @@ async fn upgrade_ws(
 
     let web_socket_key = request
         .headers
-        .get("Sec-WebSocket-Key")
+        .get("sec-websocket-key")
         .ok_or("Sec-WebSocket-Key not found")?;
     let magic_key = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     let combined_key = format!("{}{}", web_socket_key, magic_key);

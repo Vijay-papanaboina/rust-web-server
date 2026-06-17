@@ -16,7 +16,7 @@ impl Middleware {
         request: &mut Request,
         response: &mut Response,
     ) -> Result<(), Box<dyn Error>> {
-        let auth_header = match request.headers.get("Authorization") {
+        let auth_header = match request.headers.get("authorization") {
             Some(header) => header,
             None => {
                 let response_body = r#"{"error": "Authorization header is missing"}"#;

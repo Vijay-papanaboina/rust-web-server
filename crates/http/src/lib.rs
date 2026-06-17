@@ -131,11 +131,11 @@ impl Request {
             .filter_map(|header| {
                 header
                     .split_once(':')
-                    .map(|(key, value)| (key.trim().to_string(), value.trim().to_string()))
+                    .map(|(key, value)| (key.trim().to_ascii_lowercase(), value.trim().to_string()))
             })
             .collect();
         let content_length = headers
-            .get("Content-Length")
+            .get("content-length")
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(0);
 

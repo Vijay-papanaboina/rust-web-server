@@ -18,11 +18,15 @@ fn test_headers() {
     headers.set("  X-Custom-Header  ", "  my-value  ");
 
     assert_eq!(
-        headers.get("Content-Type"),
+        headers.get("content-type"),
         Some(&"application/json".to_string())
     );
     assert_eq!(
-        headers.get("X-Custom-Header"),
+        headers.get("Content-TYPE"),
+        Some(&"application/json".to_string())
+    );
+    assert_eq!(
+        headers.get("x-custom-header"),
         Some(&"my-value".to_string())
     );
 }
@@ -50,6 +54,7 @@ async fn test_response_send() {
         assert!(response_str.contains("HTTP/1.1 201 Created"));
         assert!(response_str.contains("Server: RustWebServer/0.1"));
         assert!(response_str.contains("X-Test: value"));
+        assert!(response_str.contains("Content-Type: text/plain"));
         assert!(response_str.contains("Content-Length: 5"));
         assert!(response_str.ends_with("world"));
     });
@@ -57,7 +62,8 @@ async fn test_response_send() {
     let (server_stream, _) = listener.accept().await.unwrap();
     let mut response = Response::new(server_stream);
     response.status(StatusCode::CREATED);
-    response.headers.set("X-Test", "value");
+    response.headers.set("x-test", "value");
+    response.headers.set("cOnTeNt-TyPe", "text/plain");
     response.send(b"world").await.unwrap();
 
     client_task.await.unwrap();
